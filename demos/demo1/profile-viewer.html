@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>性能分析 - Profile Viewer</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        background: #f5f5f5;
+        color: #333;
+      }
+
+      .header {
+        background: #fff;
+        border-bottom: 1px solid #e0e0e0;
+        padding: 16px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      .header h1 {
+        font-size: 20px;
+        font-weight: 500;
+      }
+
+      .main-container {
+        display: flex;
+        height: calc(100vh - 57px); /* 减去 header 高度 */
+      }
+
+      .controls {
+        background: #fff;
+        border-right: 1px solid #e0e0e0;
+        padding: 16px 24px;
+        width: 280px;
+        flex-shrink: 0;
+        overflow-y: auto;
+      }
+
+      .controls-title {
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 12px;
+        color: #666;
+      }
+
+      .thread-selector {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .thread-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: #f9f9f9;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .thread-checkbox:hover {
+        background: #f0f0f0;
+        border-color: #ccc;
+      }
+
+      .thread-checkbox input[type="checkbox"] {
+        cursor: pointer;
+        width: 16px;
+        height: 16px;
+      }
+
+      .thread-checkbox label {
+        cursor: pointer;
+        font-size: 14px;
+        user-select: none;
+      }
+
+      .thread-checkbox input[type="checkbox"]:checked + label {
+        font-weight: 500;
+        color: #1976d2;
+      }
+
+      .viewer-container {
+        flex: 1;
+        padding: 24px;
+        overflow-y: auto;
+      }
+
+      .iframes-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+
+      .iframe-wrapper {
+        width: 100%;
+        background: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      .iframe-header {
+        background: #f9f9f9;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e0e0e0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .iframe-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: #333;
+      }
+
+      .iframe-close {
+        background: none;
+        border: none;
+        color: #666;
+        cursor: pointer;
+        font-size: 18px;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        transition: all 0.2s;
+      }
+
+      .iframe-close:hover {
+        background: #f0f0f0;
+        color: #333;
+      }
+
+      .iframe-content {
+        width: 100%;
+        height: 200px;
+        border: none;
+        overflow: auto;
+      }
+
+      .loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 40px;
+        color: #666;
+      }
+
+      .error {
+        padding: 40px;
+        text-align: center;
+        color: #d32f2f;
+        background: #ffebee;
+        border-radius: 4px;
+        margin: 24px;
+      }
+
+      .empty-state {
+        padding: 60px 24px;
+        text-align: center;
+        color: #999;
+      }
+
+      .empty-state h2 {
+        font-size: 18px;
+        font-weight: 500;
+        margin-bottom: 8px;
+      }
+
+      .empty-state p {
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>性能分析 - Profile Viewer</h1>
+      <div id="session-info"></div>
+    </div>
+
+    <div class="main-container">
+      <div class="controls">
+        <div class="controls-title">选择要显示的线程：</div>
+        <div class="thread-selector" id="thread-selector">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+
+      <div class="viewer-container">
+      <div id="viewer-content">
+        <div class="empty-state">
+          <h2>暂无 Profile 数据</h2>
+          <p>请先在业务页面进行性能记录</p>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <script type="module">
+      // 从 URL 参数获取 sessionId 和 profiles
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionId = urlParams.get('sessionId');
+      const profilesParam = urlParams.get('profiles');
+
+      if (!sessionId) {
+        document.getElementById('viewer-content').innerHTML = `
+          <div class="error">
+            <h2>缺少 Session ID</h2>
+            <p>请在业务页面停止记录后，通过集成页面打开</p>
+          </div>
+        `;
+        throw new Error('缺少 sessionId 参数');
+      }
+
+      // 显示 session 信息
+      document.getElementById('session-info').textContent = `Session: ${sessionId}`;
+
+      let availableProfiles = [];
+
+      // 从 URL 参数或服务器获取 profile 信息
+      async function loadProfileList() {
+        try {
+          let profiles = [];
+
+          // 如果 URL 参数中有 profiles 列表，直接使用
+          if (profilesParam) {
+            try {
+              profiles = JSON.parse(decodeURIComponent(profilesParam));
+              availableProfiles = profiles;
+              renderThreadSelector(profiles);
+              return;
+            } catch (e) {
+              console.warn('解析 profiles 参数失败:', e);
+            }
+          }
+
+          // 否则，尝试从服务器获取（使用新的列表接口动态获取）
+          try {
+            // 优先使用新的列表接口
+            const response = await fetch(`/__perf_monitor__/list-profiles?sessionId=${sessionId}`);
+            if (response.ok) {
+              const data = await response.json();
+              if (data.profiles && Array.isArray(data.profiles)) {
+                profiles = data.profiles.map(p => ({
+                  threadId: p.threadId,
+                  url: p.url,
+                }));
+                console.log(`[Profile Viewer] 从列表接口获取到 ${profiles.length} 个 profile 文件`);
+              }
+            }
+          } catch (e) {
+            console.warn('[Profile Viewer] 列表接口获取失败，降级到逐个检查:', e);
+            
+            // 降级方案：逐个检查常见的线程 ID（最多尝试 20 个 worker）
+            const fallbackThreadIds = ['web-main'];
+            for (let i = 0; i < 20; i++) {
+              fallbackThreadIds.push(`web-worker-${i}`);
+            }
+            
+            const profilePromises = fallbackThreadIds.map(async (threadId) => {
+              const url = `/__perf_monitor__/profiles/${sessionId}-${threadId}.speedscope.json`;
+              try {
+                const response = await fetch(url, { method: 'HEAD' });
+                if (response.ok) {
+                  return {
+                    threadId,
+                    url,
+                  };
+                }
+              } catch (e) {
+                // 文件不存在，跳过
+              }
+              return null;
+            });
+            
+            const results = await Promise.all(profilePromises);
+            profiles = results.filter(p => p !== null);
+            console.log(`[Profile Viewer] 降级方案获取到 ${profiles.length} 个 profile 文件`);
+          }
+
+          availableProfiles = profiles;
+          renderThreadSelector(profiles);
+        } catch (error) {
+          console.error('加载 profile 列表失败:', error);
+          document.getElementById('thread-selector').innerHTML = `
+            <div class="error">加载 Profile 列表失败: ${error.message}</div>
+          `;
+        }
+      }
+
+      // 渲染线程选择器
+      function renderThreadSelector(profiles) {
+        const selector = document.getElementById('thread-selector');
+        
+        if (profiles.length === 0) {
+          selector.innerHTML = '<div class="empty-state">暂无 Profile 数据</div>';
+          return;
+        }
+
+        // 对 profiles 进行排序：web-main 在最前面，然后是 web-worker-0, web-worker-1, ...
+        const sortedProfiles = [...profiles].sort((a, b) => {
+          // web-main 始终在最前面
+          if (a.threadId === 'web-main') return -1;
+          if (b.threadId === 'web-main') return 1;
+          
+          // 其他按名称排序
+          return a.threadId.localeCompare(b.threadId, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+        selector.innerHTML = sortedProfiles.map(profile => `
+          <div class="thread-checkbox">
+            <input 
+              type="checkbox" 
+              id="thread-${profile.threadId}" 
+              value="${profile.threadId}"
+              onchange="toggleThread('${profile.threadId}', '${profile.url}')"
+            />
+            <label for="thread-${profile.threadId}">${profile.threadId}</label>
+          </div>
+        `).join('');
+
+        // 更新 availableProfiles 为排序后的列表
+        availableProfiles = sortedProfiles;
+      }
+
+      // 切换线程显示
+      const activeIframes = new Map();
+
+      window.toggleThread = function(threadId, url) {
+        const checkbox = document.getElementById(`thread-${threadId}`);
+        const isChecked = checkbox.checked;
+
+        if (isChecked) {
+          // 创建 iframe
+          createIframe(threadId, url);
+        } else {
+          // 移除 iframe
+          removeIframe(threadId);
+        }
+      };
+
+      // 获取已勾选的线程，按 checkbox 顺序排序
+      function getCheckedThreadsInOrder() {
+        const checkedThreads = [];
+        availableProfiles.forEach(profile => {
+          const checkbox = document.getElementById(`thread-${profile.threadId}`);
+          if (checkbox && checkbox.checked) {
+            checkedThreads.push(profile.threadId);
+          }
+        });
+        return checkedThreads;
+      }
+
+      function createIframe(threadId, url) {
+        if (activeIframes.has(threadId)) {
+          return; // 已经存在
+        }
+
+        const viewerContent = document.getElementById('viewer-content');
+        
+        // 如果当前是空状态，清空
+        if (viewerContent.querySelector('.empty-state')) {
+          viewerContent.innerHTML = '<div class="iframes-grid" id="iframes-grid"></div>';
+        }
+
+        const iframesGrid = document.getElementById('iframes-grid') || viewerContent.querySelector('.iframes-grid') || (() => {
+          const grid = document.createElement('div');
+          grid.className = 'iframes-grid';
+          grid.id = 'iframes-grid';
+          viewerContent.appendChild(grid);
+          return grid;
+        })();
+
+        // 创建 iframe 包装器
+        const wrapper = document.createElement('div');
+        wrapper.className = 'iframe-wrapper';
+        wrapper.id = `iframe-wrapper-${threadId}`;
+
+        const header = document.createElement('div');
+        header.className = 'iframe-header';
+
+        const title = document.createElement('div');
+        title.className = 'iframe-title';
+        title.textContent = threadId;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'iframe-close';
+        closeBtn.innerHTML = '×';
+        closeBtn.onclick = () => {
+          const checkbox = document.getElementById(`thread-${threadId}`);
+          if (checkbox) {
+            checkbox.checked = false;
+          }
+          removeIframe(threadId);
+        };
+
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+
+        const iframe = document.createElement('iframe');
+        iframe.className = 'iframe-content';
+        iframe.id = `iframe-${threadId}`;
+        
+        // 构建 speedscope URL
+        // 使用在线版 speedscope，通过 profileURL 参数传递文件 URL
+        // 需要将相对 URL 转换为绝对 URL
+        const absoluteUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`;
+        const speedscopeUrl = `https://www.speedscope.app/#profileURL=${encodeURIComponent(absoluteUrl)}&title=${encodeURIComponent(threadId)}`;
+        iframe.src = speedscopeUrl;
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(iframe);
+
+        // 按照 checkbox 的顺序插入 iframe
+        const checkedThreads = getCheckedThreadsInOrder();
+        const currentIndex = checkedThreads.indexOf(threadId);
+        
+        if (currentIndex === 0) {
+          // 如果是第一个，插入到最前面
+          iframesGrid.insertBefore(wrapper, iframesGrid.firstChild);
+        } else if (currentIndex > 0) {
+          // 找到前一个已勾选的线程的 iframe，插入到它后面
+          const prevThreadId = checkedThreads[currentIndex - 1];
+          const prevWrapper = activeIframes.get(prevThreadId);
+          if (prevWrapper && prevWrapper.nextSibling) {
+            iframesGrid.insertBefore(wrapper, prevWrapper.nextSibling);
+          } else if (prevWrapper) {
+            iframesGrid.appendChild(wrapper);
+          } else {
+            iframesGrid.appendChild(wrapper);
+          }
+        } else {
+          // 如果找不到位置，追加到末尾
+          iframesGrid.appendChild(wrapper);
+        }
+
+        activeIframes.set(threadId, wrapper);
+      }
+
+      function removeIframe(threadId) {
+        const wrapper = activeIframes.get(threadId);
+        if (wrapper) {
+          wrapper.remove();
+          activeIframes.delete(threadId);
+        }
+
+        // 如果所有 iframe 都被移除，显示空状态
+        const iframesGrid = document.getElementById('iframes-grid');
+        if (iframesGrid && iframesGrid.children.length === 0) {
+          document.getElementById('viewer-content').innerHTML = `
+            <div class="empty-state">
+              <h2>暂无显示的线程</h2>
+              <p>请在上方选择要显示的线程</p>
+            </div>
+          `;
+        }
+      }
+
+      // 初始化加载
+      loadProfileList();
+    </script>
+  </body>
+</html>
